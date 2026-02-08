@@ -21,9 +21,9 @@ class TradeSimulator:
             return None
 
         # Check if we already have an open trade for this coin
-        for t in self.trades:
-            if t.coin == coin and t.open:
-                return None  # Don't open duplicate
+        # for t in self.trades:
+        #     if t.coin == coin and t.open:
+        #         return None  # Don't open duplicate
 
         # Try to allocate funds
         if self.wallet.allocate(amount):

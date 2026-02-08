@@ -152,7 +152,7 @@ with col_sidebar:
 
     st.markdown(
         f"""
-    <div style='display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;'>
+    <div style='display: flex; align-items: center; gap: 0.75rem;'>
         <h1 style='margin: 0; font-size: 1.75rem; color: white;'>
             <i class='ri-currency-line' style='color: #3b82f6;'></i>
             {APP_NAME}
@@ -179,7 +179,7 @@ with col_sidebar:
         gap: 0.25rem;
         margin-bottom: 1rem;
     '>
-        <i class='ri-user-line'></i>
+        <i class="ri-code-s-slash-line"></i> Developer: 
         {AUTHOR_NAME}
         <i class='ri-external-link-line' style='font-size: 0.75rem;'></i>
     </a>
