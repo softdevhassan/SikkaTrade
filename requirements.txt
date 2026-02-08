@@ -1,0 +1,14 @@
+# ===== Core Dependencies =====
+python-binance==1.0.19
+python-dotenv==1.0.0
+
+# ===== Data Analysis =====
+pandas==2.2.0
+pandas-ta==0.3.14b
+
+# ===== UI/Dashboard =====
+streamlit==1.31.0
+streamlit-autorefresh==1.0.1
+
+# ===== Utilities =====
+requests==2.31.0
