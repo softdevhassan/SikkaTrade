@@ -17,6 +17,7 @@ COINS = [c.strip().upper() for c in os.getenv("COINS", "").split(",")]
 
 ALLOTED_USDT = float(os.getenv("ALLOTED_USDT", 0))
 PARALLEL_TRADES = int(os.getenv("PARALLEL_TRADES", 1))
+TRADE_METHOD = os.getenv("TRADE_METHOD", "SPOT").upper()
 MIN_SPOT_TRADE_USDT = float(os.getenv("MIN_SPOT_TRADE_USDT", 5))
 MAX_SPOT_TRADE_USDT = float(os.getenv("MAX_SPOT_TRADE_USDT", 50))
 

@@ -21,6 +21,12 @@ APP_NAME = os.getenv("APP_NAME", "SikkaTrade")
 AUTHOR_NAME = os.getenv("AUTHOR_NAME", "Hassan Ali")
 AUTHOR_URL = os.getenv("AUTHOR_URL", "https://linktr.ee/softdevhassan")
 
+# Load configuration
+try:
+    from config.settings import COINS
+except ImportError:
+    COINS = ["BTC", "ETH"]  # Fallback
+
 # Inject modern CSS + Remix Icons
 st.markdown(
     """
@@ -118,8 +124,12 @@ if phase == "SHUTDOWN":
     )
     st.stop()
 
-# Auto refresh
-st_autorefresh(interval=500, key="refresh")
+# Auto refresh logic - dynamic interval
+refresh_interval = 1000  # Default 1s for Phase 3
+if "PHASE_1" in phase or "PHASE_2" in phase:
+    refresh_interval = 5000  # Slower refresh during analysis (5s)
+
+st_autorefresh(interval=refresh_interval, key="refresh")
 
 # Extract data
 wallet = state.get("wallet", {})
@@ -148,10 +158,11 @@ with col_sidebar:
             {APP_NAME}
         </h1>
         <span class='mode-badge' style='
-            background: {mode_color};
-            color: white;
-            padding: 0.25rem 0.75rem;
-            border-radius: 0.375rem;
+            background-color: {mode_color}20;
+            color: {mode_color};
+            border: 1px solid {mode_color}80;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
             font-size: 0.75rem;
             font-weight: 600;
             animation: fadeIn 0.5s ease-in;
@@ -270,13 +281,43 @@ with col_sidebar:
         )
 
 with col_table:
-    # Live trades table (full height on right side)
+
+    # Coin Badges Inline
+    colors = [
+        "#f87171",
+        "#fb923c",
+        "#facc15",
+        "#a3e635",
+        "#4ade80",
+        "#22d3ee",
+        "#60a5fa",
+        "#a78bfa",
+        "#e879f9",
+        "#fb7185",
+    ]
+
+    # Generate badges without outer div
+    badges = ""
+    for i, coin in enumerate(COINS):
+        color = colors[i % len(colors)]
+        badges += (
+            f"<span style='font-size: 0.75rem; border: 1px solid {color}80; "
+            f"background-color: {color}20; color: {color}; padding: 0.2rem 0.6rem; "
+            f"border-radius: 9999px; font-weight: 500;'>{coin}</span>"
+        )
+
+    # Live trades heading with flex badges
     st.markdown(
-        """
-    <h2 style='margin:0 0 1rem 0; display:flex; align-items:center; gap:0.5rem; font-size:1.25rem;'>
-        <i class='ri-line-chart-line' style='color:#60a5fa;'></i>
-        Live Trades
-    </h2>
+        f"""
+    <div style='margin:0 0 1rem 0; display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem;'>
+        <h2 style='margin:0; font-size:1.25rem; display:flex; align-items:center; gap:0.5rem; white-space:nowrap;'>
+            <i class='ri-line-chart-line' style='color:#60a5fa;'></i>
+            Live Trades
+        </h2>
+        <div style='display:flex; flex-wrap:wrap; gap:0.4rem;'>
+            {badges}
+        </div>
+    </div>
     """,
         unsafe_allow_html=True,
     )
@@ -330,6 +371,13 @@ with col_table:
         # Stats
         open_count = sum(1 for t in trades_history if t["status"] == "OPEN")
         closed_count = len(trades_history) - open_count
-        st.caption(
-            f"📊 Total: {len(trades_history)} | 🟢 Open: {open_count} | ⚫ Closed: {closed_count}"
+        st.markdown(
+            f"""
+            <div style="display: flex; gap: 1rem; color: #94a3b8; font-size: 0.8rem; margin-top: 0.5rem;">
+                <span><i class="ri-bar-chart-box-line"></i> Total: {len(trades_history)}</span>
+                <span style="color: #4ade80;"><i class="ri-loader-2-line"></i> Open: {open_count}</span>
+                <span><i class="ri-checkbox-circle-line"></i> Closed: {closed_count}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )

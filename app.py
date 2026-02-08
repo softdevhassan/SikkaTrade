@@ -29,9 +29,11 @@ from config.settings import (
     PARALLEL_TRADES,
     MIN_SPOT_TRADE_USDT,
     MAX_SPOT_TRADE_USDT,
+    TRADE_METHOD,
 )
 
 from engine.wallet import VirtualWallet, BinanceWallet
+from engine.executor import BinanceExecutor
 from engine.simulator import TradeSimulator
 from data.binance_data import get_current_price, get_klines
 from engine.recovery import save_state
@@ -55,11 +57,12 @@ logger = logging.getLogger(__name__)
 # Global variables
 wallet = None
 simulator = None
+executor = None  # Added executor global variable
 trend_data = {}  # Store 24h trend for each coin
 
 
 def initialize_wallet():
-    """Initialize wallet based on APP_MODE"""
+    """Initialize wallet and executor based on APP_MODE"""
     if IS_LIVE_MODE:  # prod mode
         if not BINANCE_API_KEY or not BINANCE_SECRET_KEY:
             logger.error(f"[!] APP_MODE=prod but API keys are missing!")
@@ -69,11 +72,14 @@ def initialize_wallet():
         from binance.client import Client
 
         client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
-        logger.info("[PROD] LIVE TRADING MODE - REAL MONEY ACTIVE")
-        return BinanceWallet(client)
+        logger.info(f"[PROD] LIVE TRADING MODE - REAL MONEY ACTIVE ({TRADE_METHOD})")
+
+        # Initialize Executor
+        executor = BinanceExecutor(client, method=TRADE_METHOD)
+        return BinanceWallet(client), executor
     else:  # dev mode
         logger.info("[DEV] SIMULATION MODE - FAKE MONEY FOR TESTING")
-        return VirtualWallet(ALLOTED_USDT)
+        return VirtualWallet(ALLOTED_USDT), None
 
 
 def phase1_historical_analysis():
@@ -88,7 +94,7 @@ def phase1_historical_analysis():
     logger.info("=" * 60)
 
     for coin in COINS:
-        logger.info(f"\n[{coin}] Historical Analysis:")
+        # logger.info(f"\n[{coin}] Historical Analysis:")
 
         for hours in PREV_ANALYSIS_HOURS:
             try:
@@ -112,9 +118,9 @@ def phase1_historical_analysis():
                 if hours == 24:
                     trend_data[coin] = trend
 
-                # Display analysis
+                # Display analysis (Moved to debug)
                 rsi = indicators.get("RSI", 0)
-                logger.info(
+                logger.debug(
                     f"  {hours}h: Trend={trend}, RSI={rsi:.1f}, "
                     f"Price=${indicators.get('close', 0):,.2f}"
                 )
@@ -160,20 +166,30 @@ def phase2_live_monitoring():
         elapsed = int(time.time() - start_time)
         remaining = ANALYSIS_LIVE_SECONDS - elapsed
 
-        logger.info(f"\n[{elapsed}s/{ANALYSIS_LIVE_SECONDS}s] Live Prices:")
+        if elapsed % 60 == 0:  # Log only every minute
+            logger.info(f"\n[{elapsed}s/{ANALYSIS_LIVE_SECONDS}s] Live Prices:")
 
-        for coin in COINS:
-            try:
-                current_price = get_current_price(coin)
-                if coin in start_prices:
-                    change_pct = (
-                        (current_price - start_prices[coin]) / start_prices[coin]
-                    ) * 100
-                    logger.info(f"  {coin}: ${current_price:,.2f} ({change_pct:+.2f}%)")
-                else:
-                    logger.info(f"  {coin}: ${current_price:,.2f}")
-            except Exception as e:
-                logger.warning(f"  {coin}: Failed to fetch - {e}")
+            for coin in COINS:
+                try:
+                    current_price = get_current_price(coin)
+                    if coin in start_prices:
+                        change_pct = (
+                            (current_price - start_prices[coin]) / start_prices[coin]
+                        ) * 100
+                        logger.info(
+                            f"  {coin}: ${current_price:,.2f} ({change_pct:+.2f}%)"
+                        )
+                    else:
+                        logger.info(f"  {coin}: ${current_price:,.2f}")
+                except Exception as e:
+                    logger.debug(f"  {coin}: Failed to fetch - {e}")
+        else:
+            # Just update state silently
+            for coin in COINS:
+                try:
+                    get_current_price(coin)  # keep fetching to ensure connection
+                except:
+                    pass
 
         # Update GUI with monitoring progress
         save_state(
@@ -223,10 +239,10 @@ def phase3_trading():
             break
 
         try:
-            logger.info(
-                f"\n--- Trading Cycle: {datetime.now().strftime('%H:%M:%S')} ---"
-            )
-            logger.info(f"Runtime: {int(elapsed)}s / {MAX_RUNTIME_SECONDS}s")
+            # logger.info(
+            #     f"\n--- Trading Cycle: {datetime.now().strftime('%H:%M:%S')} ---"
+            # )
+            # logger.info(f"Runtime: {int(elapsed)}s / {MAX_RUNTIME_SECONDS}s")
 
             # Fetch current prices and indicators
             price_map = {}
@@ -243,7 +259,7 @@ def phase3_trading():
                         price_map[coin] = indicators_map[coin]["close"]
 
                         rsi = indicators_map[coin].get("RSI", 50)
-                        logger.info(f"{coin}: ${price_map[coin]:,.2f} | RSI={rsi:.1f}")
+                        # logger.info(f"{coin}: ${price_map[coin]:,.2f} | RSI={rsi:.1f}")
                 except Exception as e:
                     logger.error(f"Failed to get data for {coin}: {e}")
                     continue
@@ -330,12 +346,12 @@ def phase3_trading():
 
             # Save state for GUI
             wallet_snapshot = wallet.snapshot()
-            logger.info(
-                f"Wallet: Total=${wallet_snapshot['total']:.2f} "
-                f"Free=${wallet_snapshot['free']:.2f} "
-                f"Used=${wallet_snapshot['used']:.2f} "
-                f"Profit=${wallet_snapshot['profit']:.4f}"
-            )
+            # logger.info(
+            #     f"Wallet: Total=${wallet_snapshot['total']:.2f} "
+            #     f"Free=${wallet_snapshot['free']:.2f} "
+            #     f"Used=${wallet_snapshot['used']:.2f} "
+            #     f"Profit=${wallet_snapshot['profit']:.4f}"
+            # )
 
             save_state(
                 wallet,
@@ -345,7 +361,7 @@ def phase3_trading():
                 runtime_total=MAX_RUNTIME_SECONDS,
             )
 
-            # No sleep - continuous trading!
+            time.sleep(1)  # Prevent excessive updates (1s delay)
 
         except KeyboardInterrupt:
             logger.info("\n[!] Manual shutdown requested")
@@ -407,7 +423,7 @@ def phase4_shutdown():
 
 
 def main():
-    global wallet, simulator
+    global wallet, simulator, executor  # Added executor to global
 
     # Print startup banner
     print("\n" + "=" * 60)
@@ -417,6 +433,9 @@ def main():
     print(
         f"Mode: [{APP_MODE.upper()}] {'LIVE TRADING - REAL MONEY' if IS_LIVE_MODE else 'SIMULATION - FAKE MONEY'}"
     )
+    print(
+        f"Method: {TRADE_METHOD if IS_LIVE_MODE else 'SIMULATION'}"
+    )  # Added Method print
     print(f"Coins: {', '.join(COINS)}")
     print(f"Max Runtime: {MAX_RUNTIME_SECONDS}s")
     print(f"Analysis Interval: {ANALYSIS_LIVE_SECONDS}s")
@@ -425,9 +444,13 @@ def main():
     print()
 
     # Initialize wallet and simulator
-    wallet = initialize_wallet()
+    wallet, executor = initialize_wallet()  # Modified to get executor
     simulator = TradeSimulator(
-        wallet, TAKE_PROFIT_PERCENT, STOP_LOSS_PERCENT, PARALLEL_TRADES
+        wallet,
+        TAKE_PROFIT_PERCENT,
+        STOP_LOSS_PERCENT,
+        PARALLEL_TRADES,
+        executor,  # Passed executor to simulator
     )
 
     logger.info("Engine initialized successfully\n")

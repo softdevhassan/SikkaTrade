@@ -23,6 +23,30 @@ def main():
     # Get the project directory
     project_dir = Path(__file__).parent
 
+    # --- Clean up previous run files ---
+    print("[*] Cleaning up previous session logs and state...")
+
+    # 1. Clear logs
+    log_file = project_dir / "logs" / "sikkatrade.log"
+    try:
+        if log_file.exists():
+            with open(log_file, "w") as f:
+                f.write("")  # Clear content
+            print("    - Cleared logs/sikkatrade.log")
+    except Exception as e:
+        print(f"    ! Failed to clear log file: {e}")
+
+    # 2. Clear state.json
+    state_file = project_dir / "state.json"
+    try:
+        if state_file.exists():
+            state_file.unlink()  # Delete file
+            print("    - Removed old state.json")
+    except Exception as e:
+        print(f"    ! Failed to remove state.json: {e}")
+
+    # --- End clean up ---
+
     # Start the trading engine
     print("[*] Starting trading engine (app.py)...")
     engine_process = subprocess.Popen(
@@ -31,6 +55,7 @@ def main():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         universal_newlines=True,
+        encoding="utf-8",  # Force UTF-8 for Windows
         bufsize=1,
     )
 

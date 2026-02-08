@@ -10,19 +10,31 @@ client = Client(BINANCE_API_KEY, BINANCE_SECRET_KEY)
 
 
 def get_klines(symbol, hours=24):
-    """Fetch historical candlestick data"""
-    try:
-        # Calculate how many 1h candles we need
-        limit = hours
+    """Fetch historical candlestick data with retries"""
+    retries = 3
+    for attempt in range(retries):
+        try:
+            # Calculate how many 1h candles we need
+            # Always fetch at least 50 to ensure we have enough for indicators (RSI=14, BB=20)
+            limit = max(hours, 50)
 
-        klines = client.get_klines(
-            symbol=f"{symbol}USDT", interval=KLINE_INTERVAL_1HOUR, limit=limit
-        )
-
-        return klines
-    except Exception as e:
-        logger.error(f"Failed to fetch klines for {symbol}: {e}")
-        return []
+            klines = client.get_klines(
+                symbol=f"{symbol}USDT", interval=KLINE_INTERVAL_1HOUR, limit=limit
+            )
+            return klines
+        except Exception as e:
+            if attempt < retries - 1:
+                logger.warning(
+                    f"Retry {attempt + 1}/{retries} for {symbol} ({hours}h): {e}"
+                )
+                time.sleep(2**attempt)  # Exponential backoff: 1s, 2s, 4s...
+            else:
+                logger.error(
+                    f"Failed to fetch klines for {symbol} ({hours}h) after {retries} retries: {e}"
+                )
+                # import traceback
+                # logger.error(traceback.format_exc())
+                return []
 
 
 def get_current_price(symbol, retries=3):
@@ -32,7 +44,7 @@ def get_current_price(symbol, retries=3):
             ticker = client.get_symbol_ticker(symbol=f"{symbol}USDT")
             return float(ticker["price"])
         except Exception as e:
-            logger.warning(f"Attempt {attempt + 1}/{retries} failed for {symbol}: {e}")
+            logger.debug(f"Attempt {attempt + 1}/{retries} failed for {symbol}: {e}")
             if attempt < retries - 1:
                 time.sleep(2**attempt)  # Exponential backoff
             else:

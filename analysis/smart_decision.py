@@ -49,13 +49,12 @@ def should_buy(indicators, trend_24h):
 
         buy_signal = all(conditions.values())
 
-        if any(conditions.values()):
-            status = []
-            status.append(
-                f"RSI={rsi:.1f}<{RSI_OVERSOLD}? {'[Y]' if conditions['rsi_oversold'] else '[N]'}"
-            )
-            status.append(f"Trend=UP? {'[Y]' if conditions['trend_up'] else '[N]'}")
-            logger.info(f"[DEV BUY CHECK] {' | '.join(status)}")
+        # if any(conditions.values()):
+        # status.append(
+        #     f"RSI={rsi:.1f}<{RSI_OVERSOLD}? {'[Y]' if conditions['rsi_oversold'] else '[N]'}"
+        # )
+        # status.append(f"Trend=UP? {'[Y]' if conditions['trend_up'] else '[N]'}")
+        # logger.debug(f"[DEV BUY CHECK] {' | '.join(status)}")  # Changed to debug or commented out
 
         if buy_signal:
             logger.info(f"[BUY SIGNAL] DEV MODE - RSI oversold + Trend UP!")
