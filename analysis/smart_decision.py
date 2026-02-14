@@ -14,20 +14,18 @@ from config.settings import (
 logger = logging.getLogger(__name__)
 
 
-def should_buy(indicators, trend_24h):
+# Global ML Engine instance (will be injected)
+ml_engine = None
+
+
+def set_ml_engine(engine):
+    global ml_engine
+    ml_engine = engine
+
+
+def should_buy(indicators, trend_24h, ml_confidence=0.0):
     """
     Return True if buy conditions are met
-
-    DEV MODE (relaxed for testing):
-    - RSI < RSI_OVERSOLD
-    - 24h trend is UP
-
-    PROD MODE (strict):
-    - RSI < RSI_OVERSOLD
-    - MACD > MACD_signal (bullish crossover)
-    - Price near Bollinger lower band
-    - 24h trend is UP
-    - Volume > average volume
     """
     if not indicators:
         return False
@@ -49,18 +47,15 @@ def should_buy(indicators, trend_24h):
 
         buy_signal = all(conditions.values())
 
-        # if any(conditions.values()):
-        # status.append(
-        #     f"RSI={rsi:.1f}<{RSI_OVERSOLD}? {'[Y]' if conditions['rsi_oversold'] else '[N]'}"
-        # )
-        # status.append(f"Trend=UP? {'[Y]' if conditions['trend_up'] else '[N]'}")
-        # logger.debug(f"[DEV BUY CHECK] {' | '.join(status)}")  # Changed to debug or commented out
-
         if buy_signal:
-            logger.info(f"[BUY SIGNAL] DEV MODE - RSI oversold + Trend UP!")
+            logger.info(
+                f"[BUY SIGNAL] DEV MODE - RSI oversold + Trend UP! (ML Conf: {ml_confidence:.2%})"
+            )
 
     else:
-        # PROD MODE: All 5 strict conditions
+        # PROD MODE: All 5 strict conditions + ML Confidence
+        from config.settings import MODEL_MODE, ML_CONFIDENCE_THRESHOLD
+
         conditions = {
             "rsi_oversold": rsi < RSI_OVERSOLD,
             "macd_bullish": macd > macd_signal,
@@ -71,7 +66,21 @@ def should_buy(indicators, trend_24h):
             ),
         }
 
-        buy_signal = all(conditions.values())
+        technical_signal = all(conditions.values())
+
+        # ML Validation (only if enabled and trained)
+        ml_pass = True
+        if MODEL_MODE != "off" and ml_engine and ml_engine.is_trained:
+            ml_pass = ml_confidence >= ML_CONFIDENCE_THRESHOLD
+            if technical_signal:
+                logger.info(
+                    f"[ML CHECK] Confidence: {ml_confidence:.2%} >= {ML_CONFIDENCE_THRESHOLD:.2%}? {'[YES]' if ml_pass else '[NO]'}"
+                )
+        elif MODEL_MODE == "off":
+            # ML is disabled, pass through technical signal only
+            ml_pass = True
+
+        buy_signal = technical_signal and ml_pass
 
         if any(conditions.values()):
             status = []
@@ -89,7 +98,7 @@ def should_buy(indicators, trend_24h):
             logger.info(f"[PROD BUY CHECK] {' | '.join(status)}")
 
         if buy_signal:
-            logger.info(f"[BUY SIGNAL] PROD MODE - ALL CONDITIONS MET!")
+            logger.info(f"[BUY SIGNAL] PROD MODE - TECHNICAL + ML VALIDATED!")
 
     return buy_signal
 

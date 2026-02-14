@@ -31,6 +31,43 @@ class BinanceExecutor(Executor):
     def __init__(self, client, method="SPOT"):
         self.client = client
         self.method = method.upper()
+        self._symbol_info_cache = {}
+
+    def _get_step_size(self, symbol):
+        """Fetch stepSize for quantity precision"""
+        if symbol not in self._symbol_info_cache:
+            try:
+                info = self.client.get_symbol_info(symbol)
+                for f in info["filters"]:
+                    if f["filterType"] == "LOT_SIZE":
+                        self._symbol_info_cache[symbol] = float(f["stepSize"])
+                        break
+            except Exception as e:
+                logger.error(f"Error fetching symbol info for {symbol}: {e}")
+                return 0.000001  # Safe fallback
+        return self._symbol_info_cache.get(symbol, 0.000001)
+
+    def _truncate(self, value, step_size):
+        """Truncate value according to stepSize using Decimal for precision"""
+        from decimal import Decimal, ROUND_DOWN
+
+        if step_size <= 0:
+            return value
+
+        # Determine precision from step_size
+        step_str = f"{step_size:f}".rstrip("0")
+        if "." in step_str:
+            precision = len(step_str.split(".")[1])
+        else:
+            precision = 0
+
+        # Use Decimal to floor the value to the correct precision
+        d_value = Decimal(str(value))
+        d_step = Decimal(str(step_size))
+
+        # Formula: floor(value / step) * step
+        truncated = (d_value // d_step) * d_step
+        return float(truncated)
 
     def buy(self, coin, usdt_amount, price=None):
         symbol = f"{coin}USDT"
@@ -46,16 +83,22 @@ class BinanceExecutor(Executor):
         if self.method == "CONVERT":
             return self._convert_trade(coin, "USDT", quantity)
         else:
-            return self._spot_sell(symbol, quantity)
+            # Truncate quantity for SPOT sell
+            step_size = self._get_step_size(symbol)
+            truncated_qty = self._truncate(quantity, step_size)
+            logger.debug(
+                f"Truncated {quantity} to {truncated_qty} for {symbol} (stepSize: {step_size})"
+            )
+            return self._spot_sell(symbol, truncated_qty)
 
     def _spot_buy(self, symbol, usdt_amount):
         """Execute Spot Market Buy"""
         try:
-            # Note: Precision handling is complex.
-            # For simplicity, we assume user knows min limits ($5-10)
             logger.info(f"[SPOT] Buying {symbol} with ${usdt_amount}...")
+            # Spot Market Buy using quoteOrderQty (USDT amount)
+            # Binance handles the quantity calculation based on market price
             order = self.client.order_market_buy(
-                symbol=symbol, quoteOrderQty=usdt_amount  # Buy X amount of USDT worth
+                symbol=symbol, quoteOrderQty=usdt_amount
             )
             # Parse execution
             filled_qty = float(order["executedQty"])
@@ -74,11 +117,10 @@ class BinanceExecutor(Executor):
         """Execute Spot Market Sell"""
         try:
             logger.info(f"[SPOT] Selling {quantity} {symbol}...")
-            # Precision fix might be needed here.
-            # auto_truncate logic or stepSize check is recommended but complex.
-            # trying direct sell first (risky if precision mismatch)
-
-            order = self.client.order_market_sell(symbol=symbol, quantity=quantity)
+            # We use the truncated quantity here
+            order = self.client.order_market_sell(
+                symbol=symbol, quantity=f"{quantity:f}"
+            )
 
             filled_qty = float(order["executedQty"])
             cummulative_quote_qty = float(
@@ -91,7 +133,7 @@ class BinanceExecutor(Executor):
             )
             return cummulative_quote_qty, avg_price
         except Exception as e:
-            logger.error(f"[!] Spot Sell Failed: {e}")
+            logger.error(f"[!] Spot Sell Failed for {symbol} (Qty: {quantity}): {e}")
             return None, None
 
     def _convert_trade(self, from_asset, to_asset, amount):

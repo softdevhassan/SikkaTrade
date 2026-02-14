@@ -75,6 +75,7 @@ python start.py
 APP_MODE=dev
 ALLOTED_USDT=10
 MAX_RUNTIME_SECONDS=30
+MODEL_MODE=use  # use (default) or train
 ```
 
 **Expected Behavior:**
@@ -82,6 +83,7 @@ MAX_RUNTIME_SECONDS=30
 - Trades open/close rapidly (8-second timeout)
 - Many small trades for testing
 - No real profit expected
+- **ML Model**: Uses existing model. set `MODEL_MODE=train` to force retraining.
 
 ### Prod Mode (Live Trading - Real Money) ⚠️
 

@@ -109,10 +109,9 @@ class TradeSimulator:
             usdt_returned, exec_price = self.executor.sell(
                 trade.coin, trade.quantity, current_price
             )
-            if usdt_returned:
+            if usdt_returned is not None:
                 exit_price = exec_price
                 # Recalculate PnL based on actual returned USDT
-                # pnl = returned - initial
                 real_pnl = usdt_returned - trade.amount
                 trade.open = False
                 trade.exit_price = exit_price
@@ -120,8 +119,7 @@ class TradeSimulator:
                 pnl_pct = (real_pnl / trade.amount) * 100
                 return real_pnl, pnl_pct
             else:
-                # Sell failed, keep open? Or force close?
-                # Ideally keep open and retry. For now return 0
+                # Sell failed
                 return 0, 0
 
         # SIMULATION

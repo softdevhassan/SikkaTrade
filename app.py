@@ -11,6 +11,7 @@ Author: Hassan Ali (@softdevhassan)
 
 import time
 import sys
+import signal
 import logging
 import random  # For random trade amounts
 from datetime import datetime
@@ -30,6 +31,7 @@ from config.settings import (
     MIN_SPOT_TRADE_USDT,
     MAX_SPOT_TRADE_USDT,
     TRADE_METHOD,
+    MODEL_MODE,
 )
 
 from engine.wallet import VirtualWallet, BinanceWallet
@@ -43,7 +45,13 @@ from analysis.indicators import (
     analyze_trend,
     get_latest_indicators,
 )
-from analysis.smart_decision import should_buy, should_sell, calculate_trade_score
+from engine.ml_engine import MLEngine  # New Import
+from analysis.smart_decision import (
+    should_buy,
+    should_sell,
+    calculate_trade_score,
+    set_ml_engine,
+)  # Updated Import
 
 # Setup logging
 logging.basicConfig(
@@ -57,8 +65,10 @@ logger = logging.getLogger(__name__)
 # Global variables
 wallet = None
 simulator = None
-executor = None  # Added executor global variable
-trend_data = {}  # Store 24h trend for each coin
+executor = None
+ml_engine = None  # Global ML Engine
+trend_data = {}
+shutting_down = False  # Guard for shutdown
 
 
 def initialize_wallet():
@@ -82,6 +92,55 @@ def initialize_wallet():
         return VirtualWallet(ALLOTED_USDT), None
 
 
+def phase_ml_training():
+    """
+    PHASE 0: ML Training
+    Train model if MODEL_MODE='train' or if no model exists (and not 'off')
+    """
+    global ml_engine
+
+    if MODEL_MODE == "off":
+        logger.info("[ML] Machine Learning module is DISABLED (Mode: OFF)")
+        return
+
+    logger.info("=" * 60)
+    logger.info(f"PHASE 0: ML MODEL TRAINING (Mode: {MODEL_MODE.upper()})")
+    logger.info("=" * 60)
+
+    should_train = False
+    if MODEL_MODE == "train":
+        should_train = True
+        logger.info("[ML] MODEL_MODE='train' -> Forcing new training session.")
+    elif not ml_engine.is_trained:
+        if IS_LIVE_MODE:
+            logger.warning("[!] No trained ML model found.")
+            # In production, we don't want to force a 30s delay unless the user wants it
+            confirm = input("   No model found. Train now? (y/n) [Default: n]: ")
+            if confirm.lower() == "y":
+                should_train = True
+            else:
+                logger.info(
+                    "[ML] Skipping training. Bot will run with Technical Analysis only."
+                )
+        else:
+            should_train = True
+            logger.info("[ML] No existing model found -> Starting training.")
+    else:
+        logger.info("[ML] Using existing trained model (Skipping training).")
+
+    if should_train:
+        logger.info(
+            f"Training new model on {len(COINS)} coins (this may take 10-60s)..."
+        )
+        # Ensure we don't block signals during training
+        # ml_engine.train is synchronous, so it will block, but we warned the user
+        success = ml_engine.train(COINS)
+        if not success:
+            logger.error("[ML] Training failed. Proceeding without ML support.")
+
+    logger.info("=" * 60 + "\n")
+
+
 def phase1_historical_analysis():
     """
     PHASE 1: Analyze historical data
@@ -94,8 +153,6 @@ def phase1_historical_analysis():
     logger.info("=" * 60)
 
     for coin in COINS:
-        # logger.info(f"\n[{coin}] Historical Analysis:")
-
         for hours in PREV_ANALYSIS_HOURS:
             try:
                 # Fetch historical klines
@@ -164,7 +221,6 @@ def phase2_live_monitoring():
 
     while time.time() - start_time < ANALYSIS_LIVE_SECONDS:
         elapsed = int(time.time() - start_time)
-        remaining = ANALYSIS_LIVE_SECONDS - elapsed
 
         if elapsed % 60 == 0:  # Log only every minute
             logger.info(f"\n[{elapsed}s/{ANALYSIS_LIVE_SECONDS}s] Live Prices:")
@@ -219,7 +275,7 @@ def phase2_live_monitoring():
 def phase3_trading():
     """
     PHASE 3: Smart Trading
-    Execute trades based on technical indicators
+    Execute trades based on technical indicators + ML
     """
     global wallet, simulator
 
@@ -239,14 +295,10 @@ def phase3_trading():
             break
 
         try:
-            # logger.info(
-            #     f"\n--- Trading Cycle: {datetime.now().strftime('%H:%M:%S')} ---"
-            # )
-            # logger.info(f"Runtime: {int(elapsed)}s / {MAX_RUNTIME_SECONDS}s")
-
             # Fetch current prices and indicators
             price_map = {}
             indicators_map = {}
+            score_map = {}  # Store ML confidence
 
             for coin in COINS:
                 try:
@@ -258,8 +310,11 @@ def phase3_trading():
                         indicators_map[coin] = get_latest_indicators(df)
                         price_map[coin] = indicators_map[coin]["close"]
 
+                        # ML Prediction
+                        ml_prob = ml_engine.predict_proba(df)
+                        score_map[coin] = ml_prob
+
                         rsi = indicators_map[coin].get("RSI", 50)
-                        # logger.info(f"{coin}: ${price_map[coin]:,.2f} | RSI={rsi:.1f}")
                 except Exception as e:
                     logger.error(f"Failed to get data for {coin}: {e}")
                     continue
@@ -292,7 +347,7 @@ def phase3_trading():
                 # Check sell signal
                 should_close, reason = should_sell(
                     indicators,
-                    trade.entry,  # Fixed: was entry_price
+                    trade.entry,
                     current_price,
                     TAKE_PROFIT_PERCENT,
                     STOP_LOSS_PERCENT,
@@ -316,14 +371,14 @@ def phase3_trading():
                     continue
                 indicators = indicators_map[coin]
                 trend = trend_data.get(coin, "UNKNOWN")
-                if should_buy(indicators, trend):
+
+                # Check signals with ML Support
+                ml_conf = score_map.get(coin, 0.5)
+                if should_buy(indicators, trend, ml_confidence=ml_conf):
                     coins_with_signals.append(coin)
 
             # Random trade amount per coin within limits
             if coins_with_signals:
-                # Each coin gets random amount between MIN and MAX
-                pass  # Placeholder, actual logic below
-
                 # Second pass: open trades with random amounts
                 for coin in coins_with_signals:
                     # Random amount between MIN and MAX
@@ -345,14 +400,6 @@ def phase3_trading():
                             )
 
             # Save state for GUI
-            wallet_snapshot = wallet.snapshot()
-            # logger.info(
-            #     f"Wallet: Total=${wallet_snapshot['total']:.2f} "
-            #     f"Free=${wallet_snapshot['free']:.2f} "
-            #     f"Used=${wallet_snapshot['used']:.2f} "
-            #     f"Profit=${wallet_snapshot['profit']:.4f}"
-            # )
-
             save_state(
                 wallet,
                 simulator.trades,
@@ -376,36 +423,60 @@ def phase4_shutdown():
     PHASE 4: Graceful Shutdown
     Close all open trades and calculate final profit
     """
-    global wallet, simulator
+    global wallet, simulator, shutting_down
 
-    logger.info("\n" + "=" * 60)
-    logger.info("PHASE 4: AUTO-SHUTDOWN")
-    logger.info("=" * 60)
+    if shutting_down:
+        return
+    shutting_down = True
 
-    # Close all open trades
-    open_trades = [t for t in simulator.trades if t.open]
+    # Close all open trades with retries
+    max_retries = 3
+    for attempt in range(max_retries):
+        open_trades = [t for t in simulator.trades if t.open]
+        if not open_trades:
+            logger.info("[✓] All trades successfully closed.")
+            break
 
-    if open_trades:
-        logger.info(f"Closing {len(open_trades)} open trades...")
+        logger.info(
+            f"[!] {len(open_trades)} open trades remaining. Close attempt {attempt + 1}/{max_retries}..."
+        )
 
         for trade in open_trades:
             try:
+                # Get current price with retries
                 current_price = get_current_price(trade.coin)
                 pnl_usdt, pnl_pct = simulator.close_trade(trade, current_price)
-                logger.info(
-                    f"  Closed {trade.coin}: PnL=${pnl_usdt:.4f} ({pnl_pct:.2f}%)"
-                )
+
+                if not trade.open:
+                    logger.info(
+                        f"  [✓] Closed {trade.coin}: PnL=${pnl_usdt:.4f} ({pnl_pct:.2f}%)"
+                    )
+                else:
+                    logger.warning(f"  [X] Failed to close {trade.coin} - Will retry.")
             except Exception as e:
-                logger.error(f"  Failed to close {trade.coin}: {e}")
+                logger.error(f"  [!] Error during shutdown close for {trade.coin}: {e}")
+
+        if open_trades:
+            time.sleep(2)  # Wait before retry
+
+    # Re-check one last time
+    final_open_trades = [t for t in simulator.trades if t.open]
+    if final_open_trades:
+        logger.critical(f"UNABLE TO CLOSE {len(final_open_trades)} TRADES!")
+        for t in final_open_trades:
+            logger.critical(f"  STILL OPEN: {t.coin} - Qty: {t.quantity}")
+        logger.critical("PLEASE CLOSE THESE TRADES MANUALLY ON BINANCE IMMEDIATELY!")
 
     # Final wallet snapshot
     wallet_snapshot = wallet.snapshot()
     logger.info("\nFINAL REPORT:")
-    logger.info(f"  Total USDT: ${wallet_snapshot['total']:.2f}")
-    logger.info(f"  Total Profit: ${wallet_snapshot['profit']:.4f}")
+    logger.info(f"  Total USDT Balance: ${wallet_snapshot['total']:.2f}")
+    logger.info(f"  Total Realized Profit: ${wallet_snapshot['profit']:.4f}")
 
-    profit_pct = (wallet_snapshot["profit"] / ALLOTED_USDT) * 100
-    logger.info(f"  Profit %: {profit_pct:+.2f}%")
+    profit_pct = (
+        (wallet_snapshot["profit"] / ALLOTED_USDT) * 100 if ALLOTED_USDT > 0 else 0
+    )
+    logger.info(f"  Total Return: {profit_pct:+.2f}%")
 
     save_state(
         wallet,
@@ -423,7 +494,7 @@ def phase4_shutdown():
 
 
 def main():
-    global wallet, simulator, executor  # Added executor to global
+    global wallet, simulator, executor, ml_engine  # GLOBALS
 
     # Print startup banner
     print("\n" + "=" * 60)
@@ -433,35 +504,53 @@ def main():
     print(
         f"Mode: [{APP_MODE.upper()}] {'LIVE TRADING - REAL MONEY' if IS_LIVE_MODE else 'SIMULATION - FAKE MONEY'}"
     )
-    print(
-        f"Method: {TRADE_METHOD if IS_LIVE_MODE else 'SIMULATION'}"
-    )  # Added Method print
+    print(f"Method: {TRADE_METHOD if IS_LIVE_MODE else 'SIMULATION'}")
     print(f"Coins: {', '.join(COINS)}")
-    print(f"Max Runtime: {MAX_RUNTIME_SECONDS}s")
-    print(f"Analysis Interval: {ANALYSIS_LIVE_SECONDS}s")
-    print(f"Parallel Trades: {PARALLEL_TRADES}")
+    print(f"Algorithm: Technical Analysis + Machine Learning (RandomForest)")
     print("=" * 60)
     print()
 
     # Initialize wallet and simulator
-    wallet, executor = initialize_wallet()  # Modified to get executor
+    wallet, executor = initialize_wallet()
     simulator = TradeSimulator(
         wallet,
         TAKE_PROFIT_PERCENT,
         STOP_LOSS_PERCENT,
         PARALLEL_TRADES,
-        executor,  # Passed executor to simulator
+        executor,
     )
+
+    # Initialize ML Engine
+    ml_engine = MLEngine()
+    set_ml_engine(ml_engine)  # Inject into smart_decision
 
     logger.info("Engine initialized successfully\n")
 
+    # Production Mode Double-Check
+    if IS_LIVE_MODE:
+        print("\n" + "!" * 60)
+        print("  WARNING: YOU ARE STARTING IN PRODUCTION MODE!")
+        print("  REAL MONEY WILL BE USED FOR TRADES ON BINANCE.")
+        print("!" * 60)
+        confirm = input("\nType 'PROD' to confirm you want to proceed: ")
+        if confirm.strip().upper() != "PROD":
+            print("[X] Startup aborted by user.")
+            sys.exit(0)
+
+    # Signal handling for graceful shutdown
+    def signal_handler(sig, frame):
+        logger.info(f"\n[!] Signal {sig} received. Starting graceful shutdown...")
+        phase4_shutdown()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     try:
-        # Execute 4-phase trading system
+        # Execute System
+        phase_ml_training()  # New Phase 0
         phase1_historical_analysis()
         phase2_live_monitoring()
         phase3_trading()
-    except KeyboardInterrupt:
-        logger.info("\n[!] Keyboard interrupt received")
     except Exception as e:
         logger.error(f"[X] Fatal error: {e}", exc_info=True)
     finally:

@@ -4,8 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # App Mode: dev (simulation) or prod (live trading)
+# App Mode: dev (simulation) or prod (live trading)
 APP_MODE = os.getenv("APP_MODE", "dev").lower()  # dev or prod
 IS_LIVE_MODE = APP_MODE == "prod"  # Only prod uses real Binance trading
+MODEL_MODE = os.getenv("MODEL_MODE", "use").lower()  # train/use/off
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.60))
 
 # ===== API KEYS =====
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
